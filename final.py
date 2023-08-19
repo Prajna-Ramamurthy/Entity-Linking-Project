@@ -62,9 +62,6 @@ for text in texts:
             true_positives += 1
         else:
             false_negatives += 1
-    else:
-        if len(matches) > 0:
-            false_positives += 1
 
 # Calculate precision, recall, and F1-score
 precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
