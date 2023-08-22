@@ -1,74 +1,80 @@
 from rdflib import Graph, Namespace
 from rdflib.namespace import RDF, OWL
-import spacy
-from spacy.matcher import Matcher
+import re
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import precision_score, recall_score, f1_score
 
-# Load the LOINC TTL file
+# Define the namespaces for skos and umls
+SKOS = Namespace("http://www.w3.org/2004/02/skos/core#")
+UMLS = Namespace("http://bioportal.bioontology.org/ontologies/umls/")
+
+# Step 1: Create an RDF graph and parse the Turtle file
 g = Graph()
-g.parse("/home/prajna/Downloads/LOINC.ttl", format="turtle")
+file_path = "/home/prajna/Documents/summer23/IEEE_CS/final/LOINC.ttl"
+g.parse(file_path, format="turtle")
 
-# Define namespaces
-skos = Namespace("http://www.w3.org/2004/02/skos/core#")
-umls = Namespace("http://bioportal.bioontology.org/ontologies/umls/")
-
-# Extract information from the RDF graph
-entities = {}
+# Step 2: Extract information from the RDF graph
+# In this example, we will extract the labels and CUIs for each class in the ontology.
+entities = []
 for class_uri in g.subjects(predicate=RDF.type, object=OWL.Class):
-    label = g.value(subject=class_uri, predicate=skos.prefLabel)
-    cui = g.value(subject=class_uri, predicate=umls.cui)
-
+    label = g.value(subject=class_uri, predicate=SKOS.prefLabel)
+    cui = g.value(subject=class_uri, predicate=UMLS.cui)
     if label and cui:
-        entities[class_uri] = {"label": label, "cui": cui}
+        entities.append({"label": label, "cui": cui})
 
-# Initialize spaCy with a blank English model
-nlp = spacy.blank("en")
-matcher = Matcher(nlp.vocab)
+# Convert the extracted data to a DataFrame for ML
+import pandas as pd
+df = pd.DataFrame(entities)
 
-# Add patterns for LOINC concepts
-for class_uri, info in entities.items():
-    label = info["label"]
-    pattern = [{"LOWER": token.lower()} for token in label.split()]
-    matcher.add(info["cui"], [pattern])
+# Extract the string values from the RDF literals
+df['cui'] = df['cui'].apply(lambda x: str(x))
 
-# Sample texts
-texts = [
-    "None noted",
-    "For how long in total have you used oral contraceptives:Time:Pt:^Patient:Qn:PhenX",
-    "Ocular alignment and motility",
-    "Lutropin^7th specimen post XXX challenge:ACnc:Pt:Ser/Plas:Qn"
-]
+# Define a regex pattern for valid CUI format
+cui_pattern = re.compile(r'^C\d{7}$')
 
-# Annotations with correct CUI values
-annotations = {
-    "None noted": "C3842145",
-    "For how long in total have you used oral contraceptives:Time:Pt:^Patient:Qn:PhenX": "C3174435",
-    "Ocular alignment and motility": "C3476283",
-    "Lutropin^7th specimen post XXX challenge:ACnc:Pt:Ser/Plas:Qn": "C0943547"
-}
+# Add a new column indicating whether the CUI is valid based on the pattern
+df['valid_cui'] = df['cui'].apply(lambda x: cui_pattern.match(x) is not None)
 
-# Initialize variables for evaluation
-true_positives = 0
-false_positives = 0
-false_negatives = 0
+# Encode the CUIs using label encoding
+from sklearn.preprocessing import LabelEncoder
+encoder = LabelEncoder()
+df['cui_encoded'] = encoder.fit_transform(df['cui'])
 
-# Process the texts and match with LOINC concepts
-for text in texts:
-    doc = nlp(text)
-    matches = matcher(doc)
-    expected_cui = annotations.get(text, None)
+# Step 3: Split the data into training and testing sets
+train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
 
-    if expected_cui:
-        if any(nlp.vocab.strings[match_id] == expected_cui for match_id, _, _ in matches):
-            true_positives += 1
-        else:
-            false_negatives += 1
+# Step 4: Train a Decision Tree classifier
+X_train = train_df[['cui_encoded']]
+y_train = train_df['valid_cui']
+
+classifier = DecisionTreeClassifier(random_state=42)
+classifier.fit(X_train, y_train)
+
+# Step 5: Evaluate the classifier on the test set
+X_test = test_df[['cui_encoded']]
+y_test = test_df['valid_cui']
+y_pred = classifier.predict(X_test)
 
 # Calculate precision, recall, and F1-score
-precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
-recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
-f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
 
-# Display the metrics
-print(f"Precision: {precision:.2f}")
-print(f"Recall: {recall:.2f}")
-print(f"F1-Score: {f1:.2f}")
+# Step 6: Save the performance metrics to a separate file
+metrics_file_path = "performance_metrics.txt"
+with open(metrics_file_path, "w") as f:
+    f.write("Performance Metrics:\n")
+    f.write(f"Precision: {precision:.2f}\n")
+    f.write(f"Recall: {recall:.2f}\n")
+    f.write(f"F1-Score: {f1:.2f}\n")
+
+# Step 7: Print the head of the extracted information (optional)
+print("The extracted information and performance metrics have been saved to file.")
+count = 1
+print("The following is the first five sets of output.")
+for entity in entities:
+    if count <= 5:
+        print(f"Label: {entity['label']}")
+        print(f"CUI: {entity['cui']}")
+        count += 1
